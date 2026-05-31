@@ -15,7 +15,6 @@ posture:
 - **Runnable presets.** A preset is a real `.scad` file (`<slug>.tui.scad`):
   ```scad
   // tuiscad-preset
-  // name: drawers atelier 51x51 v2
   // source: gridfinity_baseplate.scad
 
   include <gridfinity_baseplate.scad>
@@ -68,19 +67,25 @@ Bindings:
 | `o`      | Open the active preset in OpenSCAD       |
 | `e`      | Export the active preset to STL          |
 | `d`      | Duplicate the active preset              |
+| `r`      | Rename the active preset (renames file)  |
 | `Delete` | Delete the active preset (with confirm)  |
 | `Ctrl+S` | Save (auto-save is on, but explicit too) |
 | `Ctrl+Q` | Quit                                     |
 
-Presets are written to the current directory as `<slug>.tui.scad`. The
-binding to a source `.scad` lives inside the preset's `// source:` metadata
-header (and matching `include <...>`), not in the filename.
+Presets are written to the current directory as `<slug>.tui.scad`. A preset's
+**name is its file name** (sans the `.tui.scad` suffix) — it isn't stored
+anywhere inside the file. Rename a preset with `r` (which renames the file);
+if a matching `<name>.stl` sits next to it, you're asked whether to rename
+that too. The binding to a source `.scad` lives inside the preset's
+`// source:` metadata header (and matching `include <...>`), not in the
+filename.
 
 Creating a new preset opens a model picker that lists every `.scad` under the
-current directory recursively. Library files (paths matching `*/modules/*`,
-filenames starting with `module_*` / `functions_*` / `function_*`, or ending
-in `_constants.scad`) are hidden by default; toggle "Show libraries" to
-include them.
+current directory recursively. If the source lives above cwd, press `u` (or
+click "↑ parent") inside the picker to re-root one level up; repeat to climb
+further. Library files (paths matching `*/modules/*`, filenames starting with
+`module_*` / `functions_*` / `function_*`, or ending in `_constants.scad`)
+are hidden by default; toggle "Show libraries" to include them.
 
 The preset sidebar shows *all* presets in the directory regardless of which
 model they target — picking a preset for a different model auto-switches the

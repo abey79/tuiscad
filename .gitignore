@@ -17,3 +17,6 @@ dist/
 .vscode/
 .idea/
 .DS_Store
+
+# pytest-textual-snapshot generated diff report
+snapshot_report.html

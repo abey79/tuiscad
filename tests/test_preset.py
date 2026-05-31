@@ -57,10 +57,41 @@ def test_save_and_load_roundtrip(tmp_path: Path):
     p.save(target)
 
     loaded = load_preset(target)
-    assert loaded.name == "atelier 51"
+    # The name is the file name (sans suffix), not anything stored in-file.
+    assert loaded.name == "atelier_51"
     assert loaded.source_path == Path("source.scad")
     assert loaded.overrides == {"pitch": [51, 51, 7], "Enable_Magnets": True}
     assert loaded.preset_path == target
+
+
+def test_name_is_filename_not_stored_in_file(tmp_path: Path):
+    """The name must not be persisted in the file — it's purely the filename."""
+    p = Preset(name="whatever", source_path=Path("source.scad"))
+    target = tmp_path / "my_widget.tui.scad"
+    p.save(target)
+
+    text = target.read_text()
+    assert "// name:" not in text
+
+    # Name is derived from the file name, ignoring whatever was passed in-memory.
+    assert load_preset(target).name == "my_widget"
+
+
+def test_load_ignores_stale_name_comment(tmp_path: Path):
+    """Legacy presets carrying a `// name:` comment still load — the name
+    comes from the filename and the stale comment is ignored."""
+    target = tmp_path / "real_name.tui.scad"
+    target.write_text(
+        "// tuiscad-preset\n"
+        "// name: a stale display name\n"
+        "// source: source.scad\n\n"
+        "include <source.scad>\n\n"
+        "// === overrides ===\n"
+        "Width = 5;\n"
+    )
+    loaded = load_preset(target)
+    assert loaded.name == "real_name"
+    assert loaded.overrides == {"Width": 5}
 
 
 def test_only_diff_is_persisted(tmp_path: Path):

@@ -14,7 +14,6 @@ from pathlib import Path
 from .models import ScadModel, ScadValue
 
 PRESET_HEADER = "// tuiscad-preset"
-PRESET_NAME_KEY = "// name:"
 PRESET_SOURCE_KEY = "// source:"
 OVERRIDES_MARKER = "// === overrides ==="
 
@@ -25,7 +24,12 @@ _ASSIGN_RE = re.compile(r"^\s*(?P<name>[A-Za-z_][\w]*)\s*=\s*(?P<value>.+?)\s*;\
 
 @dataclass
 class Preset:
-    """A named set of overrides over a source `.scad`."""
+    """A named set of overrides over a source `.scad`.
+
+    The ``name`` is purely the file name (sans the ``.tui.scad`` suffix) — it
+    is *not* persisted inside the file. Rename the file (see
+    :func:`preset_filename` / the app's rename action) to rename the preset.
+    """
 
     name: str
     source_path: Path
@@ -55,7 +59,6 @@ class Preset:
     def to_scad(self) -> str:
         lines = [
             PRESET_HEADER,
-            f"{PRESET_NAME_KEY} {self.name}",
             f"{PRESET_SOURCE_KEY} {self.source_path.as_posix()}",
             "",
             f"include <{self.source_path.as_posix()}>",
@@ -90,6 +93,11 @@ PRESET_SUFFIX = ".tui.scad"
 
 def preset_filename(name: str) -> str:
     return f"{slugify(name)}{PRESET_SUFFIX}"
+
+
+def preset_name(path: Path) -> str:
+    """A preset's name *is* its file name, sans the ``.tui.scad`` suffix."""
+    return path.name.removesuffix(PRESET_SUFFIX) or path.stem
 
 
 def is_preset_file(path: Path) -> bool:
@@ -137,8 +145,8 @@ def format_scad_value(value: ScadValue) -> str:
 
 
 def load_preset(path: Path) -> Preset:
-    text = Path(path).read_text(encoding="utf-8")
-    name: str | None = None
+    path = Path(path)
+    text = path.read_text(encoding="utf-8")
     source: str | None = None
     overrides: dict[str, ScadValue] = {}
     seen_overrides_marker = False
@@ -148,9 +156,6 @@ def load_preset(path: Path) -> Preset:
 
     for raw in text.splitlines():
         line = raw.rstrip()
-        if line.startswith(PRESET_NAME_KEY):
-            name = line[len(PRESET_NAME_KEY) :].strip()
-            continue
         if line.startswith(PRESET_SOURCE_KEY):
             source = line[len(PRESET_SOURCE_KEY) :].strip()
             continue
@@ -173,14 +178,14 @@ def load_preset(path: Path) -> Preset:
                 v = m.group("value").strip()
             overrides[m.group("name")] = v
 
-    if name is None or source is None:
+    if source is None:
         raise ValueError(f"{path} does not look like a tuiscad preset")
 
     return Preset(
-        name=name,
+        name=preset_name(path),
         source_path=Path(source),
         overrides=overrides,
-        preset_path=Path(path),
+        preset_path=path,
     )
 
 
@@ -218,7 +223,7 @@ def new_preset(
     preset_path = search_dir / preset_filename(name)
     rel_source = Path(os.path.relpath(Path(source_path).resolve(), Path(search_dir).resolve()))
     return Preset(
-        name=name,
+        name=preset_name(preset_path),
         source_path=rel_source,
         preset_path=preset_path,
     )

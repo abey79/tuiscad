@@ -30,6 +30,7 @@ from .preset import (
     load_preset,
     new_preset,
     preset_filename,
+    preset_name,
     values_equal,
 )
 from .screens import ConfirmScreen, ModelPickerScreen, NewPresetScreen
@@ -113,6 +114,7 @@ class TuiscadApp(App[None]):
         Binding("o", "open_openscad", "Open in OpenSCAD", show=True),
         Binding("e", "export_stl", "Export STL", show=True),
         Binding("d", "duplicate_preset", "Duplicate", show=True),
+        Binding("r", "rename_preset", "Rename", show=True),
         Binding("delete", "delete_preset", "Delete", show=True),
         Binding("R", "reset_all", "Reset all", show=False),
     ]
@@ -558,7 +560,7 @@ class TuiscadApp(App[None]):
                 )
                 return
             clone = Preset(
-                name=name,
+                name=preset_name(new_path),
                 source_path=original.source_path,
                 overrides=dict(original.overrides),
                 preset_path=new_path,
@@ -580,6 +582,87 @@ class TuiscadApp(App[None]):
                 ),
                 initial=suggested,
                 confirm_label="Duplicate",
+            ),
+            _on_name,
+        )
+
+    def action_rename_preset(self) -> None:
+        original = self.active_preset
+        original_path = original.preset_path if original is not None else None
+        if original is None or original_path is None:
+            self.notify("No preset to rename.", severity="warning")
+            return
+        target_dir = original_path.parent
+        old_name = original.name
+        # The STL export names itself after the preset stem, so a sibling
+        # `<name>.stl` is "the" matching STL.
+        old_stl = original_path.with_name(f"{old_name}.stl")
+
+        def _apply(new_path: Path, rename_stl: bool) -> None:
+            try:
+                original_path.rename(new_path)
+            except OSError as exc:
+                self.notify(f"Failed to rename: {exc}", severity="error")
+                return
+            if rename_stl:
+                new_stl = new_path.with_name(f"{preset_name(new_path)}.stl")
+                try:
+                    old_stl.rename(new_stl)
+                except OSError as exc:
+                    self.notify(
+                        f"Preset renamed, but STL rename failed: {exc}",
+                        severity="error",
+                    )
+            self.presets = discover_presets(None, self.search_dir)
+            self.active_preset = next(
+                (
+                    p
+                    for p in self.presets
+                    if p.preset_path and p.preset_path.resolve() == new_path.resolve()
+                ),
+                None,
+            )
+            self._populate_preset_list()
+            self._render_params()
+            self._refresh_status()
+            self.notify(f"Renamed → {new_path.name}")
+
+        def _on_name(name: str | None) -> None:
+            if name is None:
+                return
+            new_path = target_dir / preset_filename(name)
+            if new_path.resolve() == original_path.resolve():
+                return  # unchanged
+            if new_path.exists():
+                self.notify(
+                    f"A preset file already exists at {new_path.name}.",
+                    severity="error",
+                )
+                return
+            if old_stl.exists():
+                # Ask whether to rename the sibling STL too. Declining still
+                # renames the preset — the question is only about the STL.
+                self.push_screen(
+                    ConfirmScreen(
+                        title="Rename matching STL?",
+                        message=(
+                            f"[b]{old_stl.name}[/] matches this preset. "
+                            "Rename it to match the new name too?"
+                        ),
+                        confirm_label="Rename STL",
+                        confirm_variant="primary",
+                    ),
+                    lambda confirmed: _apply(new_path, bool(confirmed)),
+                )
+            else:
+                _apply(new_path, False)
+
+        self.push_screen(
+            NewPresetScreen(
+                title="Rename preset",
+                help_text=(f"Renaming [b]{old_name}[/]. The preset's file is renamed to match."),
+                initial=old_name,
+                confirm_label="Rename",
             ),
             _on_name,
         )

@@ -185,14 +185,16 @@ class ConfirmScreen(ModalScreen[bool]):
 class ModelPickerScreen(ModalScreen[Path | None]):
     """Pick the source `.scad` model that a new preset should target.
 
-    Shows every `.scad` file under the search directory (recursively),
-    excluding tuiscad presets. Library files (those that look like
-    dependencies based on path/filename heuristics) are hidden by default;
-    a toggle reveals them.
+    Shows every `.scad` file under the current root (recursively), excluding
+    tuiscad presets. Library files (those that look like dependencies based
+    on path/filename heuristics) are hidden by default; a toggle reveals
+    them. The user can re-root one level up at any time (the source `.scad`
+    may live above cwd).
     """
 
     BINDINGS: ClassVar[list[BindingType]] = [
         ("escape", "cancel", "Cancel"),
+        ("u", "go_up", "Up"),
     ]
 
     DEFAULT_CSS = """
@@ -213,6 +215,18 @@ class ModelPickerScreen(ModalScreen[Path | None]):
     ModelPickerScreen Static.help {
         color: $text-muted;
         margin-bottom: 1;
+    }
+    ModelPickerScreen .root-row {
+        height: auto;
+        margin-bottom: 1;
+    }
+    ModelPickerScreen #current-root {
+        width: 1fr;
+        color: $text;
+        content-align: left middle;
+    }
+    ModelPickerScreen #up-dir {
+        min-width: 12;
     }
     ModelPickerScreen #file-list {
         height: 1fr;
@@ -241,18 +255,24 @@ class ModelPickerScreen(ModalScreen[Path | None]):
     def __init__(self, search_dir: Path) -> None:
         super().__init__()
         self.search_dir = search_dir.resolve()
+        self._root = self.search_dir
+        self._show_libraries = False
         self._selected: Path | None = None
 
     def compose(self) -> ComposeResult:
-        with Vertical():
+        with Vertical(id="picker-root"):
             yield Label("Pick a model", classes="title")
             yield Static(
-                f"OpenSCAD models under [b]{self.search_dir}[/]. "
-                "Libraries (modules/, [italic]module_*[/], [italic]functions_*[/]) "
-                "are hidden by default.",
+                "OpenSCAD models under the current root (libraries — "
+                "[italic]modules/[/], [italic]module_*[/], [italic]functions_*[/], "
+                "[italic]*_constants.scad[/] — are hidden by default). "
+                "Press [b]u[/] to go up one directory.",
                 classes="help",
             )
-            yield ScadModelTree(self.search_dir, id="file-list")
+            with Horizontal(classes="root-row"):
+                yield Static(self._root_display(), id="current-root")
+                yield Button("↑ parent", id="up-dir", disabled=self._at_filesystem_root())
+            yield ScadModelTree(self._root, id="file-list")
             with Horizontal(classes="toggle-row"):
                 yield Switch(value=False, id="show-libs")
                 yield Label("Show libraries")
@@ -266,6 +286,7 @@ class ModelPickerScreen(ModalScreen[Path | None]):
 
     def on_switch_changed(self, event: Switch.Changed) -> None:
         if event.switch.id == "show-libs":
+            self._show_libraries = event.value
             tree = self.query_one("#file-list", ScadModelTree)
             tree.show_libraries = event.value
 
@@ -293,11 +314,47 @@ class ModelPickerScreen(ModalScreen[Path | None]):
         else:
             self._selected = None
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "cancel":
             self.dismiss(None)
+        elif event.button.id == "up-dir":
+            await self.action_go_up()
         elif event.button.id == "pick" and self._selected is not None:
             self.dismiss(self._selected)
 
     def action_cancel(self) -> None:
         self.dismiss(None)
+
+    async def action_go_up(self) -> None:
+        if self._at_filesystem_root():
+            return
+        await self._reroot(self._root.parent)
+
+    # --- Internal ----------------------------------------------------------
+
+    def _at_filesystem_root(self) -> bool:
+        return self._root.parent == self._root
+
+    def _root_display(self) -> str:
+        return f"Root: [b]{self._root}[/]"
+
+    async def _reroot(self, new_root: Path) -> None:
+        new_root = new_root.resolve()
+        if new_root == self._root:
+            return
+        self._root = new_root
+        self._selected = None
+        # DirectoryTree doesn't support live re-rooting reliably across
+        # versions, so swap the widget out. Await the removal so the id
+        # frees up before we mount the replacement.
+        await self.query_one("#file-list", ScadModelTree).remove()
+        new_tree = ScadModelTree(
+            self._root,
+            show_libraries=self._show_libraries,
+            id="file-list",
+        )
+        container = self.query_one("#picker-root", Vertical)
+        await container.mount(new_tree, before=container.query_one(".toggle-row"))
+        new_tree.focus()
+        self.query_one("#current-root", Static).update(self._root_display())
+        self.query_one("#up-dir", Button).disabled = self._at_filesystem_root()

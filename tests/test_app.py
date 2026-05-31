@@ -20,6 +20,36 @@ def workspace(tmp_path: Path) -> Path:
     return tmp_path
 
 
+async def test_model_picker_can_navigate_up_from_search_dir(workspace: Path):
+    """Pressing `u` (or the ↑ button) re-roots the model picker one level up.
+
+    Real users often launch tuiscad from a subdir whose source `.scad` lives
+    in the parent — they need a way to reach it without restarting.
+    """
+    from tuiscad.screens import ModelPickerScreen
+    from tuiscad.treebrowse import ScadModelTree
+
+    # Put a model in the parent dir so it's only reachable after going up.
+    parent_model = workspace.parent / "parent_model.scad"
+    parent_model.write_text("foo = 1;\n")
+    try:
+        app = TuiscadApp(workspace / "sample.scad", workspace)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            screen = ModelPickerScreen(workspace)
+            await app.push_screen(screen)
+            await pilot.pause()
+            tree = screen.query_one("#file-list", ScadModelTree)
+            assert Path(str(tree.path)).resolve() == workspace.resolve()
+
+            await screen.action_go_up()
+            await pilot.pause()
+            tree = screen.query_one("#file-list", ScadModelTree)
+            assert Path(str(tree.path)).resolve() == workspace.parent.resolve()
+    finally:
+        parent_model.unlink(missing_ok=True)
+
+
 async def test_app_mounts_in_readonly_until_preset_created(workspace: Path):
     app = TuiscadApp(workspace / "sample.scad", workspace)
     async with app.run_test(size=(120, 40)) as pilot:
@@ -298,6 +328,120 @@ async def test_duplicate_preset_clones_overrides_to_new_file(workspace: Path):
         assert new_path.exists()
         assert "Width = [0, 99];" in new_path.read_text()
         assert clone.overrides == {"Width": [0, 99]}
+
+
+async def test_rename_preset_renames_the_file(workspace: Path):
+    pre = new_preset("oldname", workspace / "sample.scad", workspace)
+    pre.set_override("Width", [0, 1], default=[3, 0])
+    pre.save()
+
+    app = TuiscadApp(workspace / "sample.scad", workspace)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app._activate_preset_file(pre.preset_path)  # type: ignore[arg-type]
+        await pilot.pause()
+
+        from tuiscad.screens import NewPresetScreen
+
+        app.action_rename_preset()
+        await pilot.pause()
+        assert isinstance(app.screen, NewPresetScreen)
+        app.screen._submit("brand new")
+        await pilot.pause()
+
+        assert not (workspace / "oldname.tui.scad").exists()
+        new_path = workspace / "brand_new.tui.scad"
+        assert new_path.exists()
+        # Overrides survive the rename.
+        assert "Width = [0, 1];" in new_path.read_text()
+        # Active preset follows the rename; its name is the new file name.
+        assert app.active_preset is not None
+        assert app.active_preset.name == "brand_new"
+
+
+async def test_rename_preset_offers_and_renames_matching_stl(workspace: Path):
+    pre = new_preset("widget", workspace / "sample.scad", workspace)
+    pre.save()
+    stl = workspace / "widget.stl"
+    stl.write_bytes(b"solid x\nendsolid x\n")
+
+    app = TuiscadApp(workspace / "sample.scad", workspace)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app._activate_preset_file(pre.preset_path)  # type: ignore[arg-type]
+        await pilot.pause()
+
+        from tuiscad.screens import ConfirmScreen, NewPresetScreen
+
+        app.action_rename_preset()
+        await pilot.pause()
+        assert isinstance(app.screen, NewPresetScreen)
+        app.screen._submit("gadget")
+        await pilot.pause()
+
+        # A matching STL exists → we must be asked about it.
+        assert isinstance(app.screen, ConfirmScreen)
+        app.screen.dismiss(True)
+        await pilot.pause()
+
+        assert (workspace / "gadget.tui.scad").exists()
+        assert not stl.exists()
+        assert (workspace / "gadget.stl").exists()
+
+
+async def test_rename_preset_declining_stl_keeps_it(workspace: Path):
+    pre = new_preset("widget", workspace / "sample.scad", workspace)
+    pre.save()
+    stl = workspace / "widget.stl"
+    stl.write_bytes(b"solid x\nendsolid x\n")
+
+    app = TuiscadApp(workspace / "sample.scad", workspace)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app._activate_preset_file(pre.preset_path)  # type: ignore[arg-type]
+        await pilot.pause()
+
+        from tuiscad.screens import ConfirmScreen, NewPresetScreen
+
+        app.action_rename_preset()
+        await pilot.pause()
+        assert isinstance(app.screen, NewPresetScreen)
+        app.screen._submit("gadget")
+        await pilot.pause()
+
+        assert isinstance(app.screen, ConfirmScreen)
+        app.screen.dismiss(False)  # decline the STL rename
+        await pilot.pause()
+
+        # Preset still renamed; the STL is left untouched at its old name.
+        assert (workspace / "gadget.tui.scad").exists()
+        assert stl.exists()
+        assert not (workspace / "gadget.stl").exists()
+
+
+async def test_rename_preset_rejects_existing_target(workspace: Path):
+    a = new_preset("alpha", workspace / "sample.scad", workspace)
+    a.save()
+    b = new_preset("beta", workspace / "sample.scad", workspace)
+    b.save()
+
+    app = TuiscadApp(workspace / "sample.scad", workspace)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app._activate_preset_file(a.preset_path)  # type: ignore[arg-type]
+        await pilot.pause()
+
+        from tuiscad.screens import NewPresetScreen
+
+        app.action_rename_preset()
+        await pilot.pause()
+        assert isinstance(app.screen, NewPresetScreen)
+        app.screen._submit("beta")  # collides with the existing preset
+        await pilot.pause()
+
+        # Both files still present; the rename was refused.
+        assert (workspace / "alpha.tui.scad").exists()
+        assert (workspace / "beta.tui.scad").exists()
 
 
 async def test_delete_preset_removes_file_and_clears_active(workspace: Path):
